@@ -1,18 +1,11 @@
 #include "pcap.h"
+#include <netinet/in.h>
 #include <pcap/pcap.h>
 #include <stdio.h>
+#include "types.h"
+
 
 #define SNAP_LEN 1518
-
-void packet_handler(u_char *args, const struct pcap_pkthdr *header, const u_char *packet) {
-	printf("packet captured, length: %d \n", header->len);
-	printf("data: \n");
-	for (int i = 0; i < header->len; i++) {
-		printf("%02X", packet[i]);
-		if ((i + 1) % 16 == 0) printf("\n");
-	}
-	printf("\n");
-}
 
 // for printing Mac Addresses
 void formatMAC(const uint8_t addr[6], char* buffer) {
@@ -20,13 +13,16 @@ void formatMAC(const uint8_t addr[6], char* buffer) {
 	  addr[0], addr[1], addr[2], addr[3], addr[4], addr[5]);	
 }
 
-void parse_ethernet_header(const u_char *packet) {
-	struct ethernet_header{
-		uint8_t dest[6]; // Destination MAC Address
-		uint8_t src[6]; // Source MAC Address
-		uint16_t ethertype;
-	};
-	
+void formatIPv4(const uint32_t addr, char* buffer) {
+	snprintf(buffer, 16, "%u.%u.%u.%u",
+	  (addr >> 24) & 0xFF,
+	  (addr >> 16) & 0xFF,
+	  (addr >> 8) & 0xFF,
+	  addr & 0xFF
+	  );	
+}
+
+uint16_t parse_ethernet_header(const u_char *packet) {
 	struct ethernet_header *eth = (struct ethernet_header *)packet;
 	
 	// Buffers for formatted MAC's
@@ -38,8 +34,34 @@ void parse_ethernet_header(const u_char *packet) {
 	formatMAC(eth->src, srcMAC);
 	printf("Source: %s \n", srcMAC);
 	printf("Destination: %s \n", destMAC);
+	return eth->ethertype;
 }
 
+void parse_ipv_header(const u_char *packet, uint16_t ethertype) {
+	if(ntohs(ethertype) == 0x0800) { // if ethertype is IPv4
+		struct  ipv4_header *iph = (struct ipv4_header *)packet + sizeof(struct ethernet_header);
+		char destIP[16];			
+		char srcIP[16];
+		formatIPv4(iph->dest_address, destIP);
+		formatIPv4(iph->src_address, srcIP);
+		printf("[IPv4]: %s --> %s ", srcIP, destIP);
+
+	} else if (ntohs(ethertype) == 0x86DD) { // if ethertype is IPv6
+		struct ipv6_header *iph = (struct ipv6_header *)packet;	
+		printf("IPv6 Support not yet added \n");
+	}else {
+		printf("Unidentified IP version: %04x\n", ntohs(ethertype));
+
+	}
+} 
+
+void packet_handler(u_char *args, const struct pcap_pkthdr *header, const u_char *packet) {
+	printf("packet captured, length: %d \n", header->len);
+
+	uint16_t ethertype = parse_ethernet_header(packet);
+	parse_ipv_header(packet, ethertype);
+	printf("\n\n");
+}
 
 
 int main() {
@@ -57,7 +79,7 @@ int main() {
 		return 1;
 	}
 
-	printf("Capturing on device: %s \n", dev->name);
+	printf("Capturing on device: %s \n\n", dev->name);
 
 	// Open the first device for capture
 	pcap_t *handle = pcap_open_live(dev->name, SNAP_LEN, 1, 1000, errBuf);	
